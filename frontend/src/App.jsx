@@ -1,5 +1,7 @@
+// App.jsx
+
 import { useState, useEffect } from "react";
-import { ToastContainer, toast } from "react-toastify";
+import { ToastContainer } from "react-toastify";
 import Header from "./components/Header";
 import SignMessage from "./components/SignMessage";
 import MeetingCreator from "./components/MeetingCreator";
@@ -8,16 +10,16 @@ import {
   handleAccountsChanged,
   getNetworkInfo,
 } from "./utils/web3";
-import SuccessMessage from "./components/SuccessMessage";
 import "react-toastify/dist/ReactToastify.css";
 import showToast from "./utils/toast";
-
-
+import LoginForm from "./smallcomponents/LoginForm";
+import Room from "./smallcomponents/room";
 
 function App() {
   const [account, setAccount] = useState(null);
   const [networkInfo, setNetworkInfo] = useState(null);
-  const [meetingId, setMeetingId] = useState(null);
+  const [meetingId, setMeetingId] = useState();
+
 
   useEffect(() => {
     const updateNetworkInfo = async () => {
@@ -46,16 +48,13 @@ function App() {
 
     return () => {
       if (window.ethereum) {
-        window.ethereum.removeListener(
-          "accountsChanged",
-          handleAccountsChanged
-        );
+        window.ethereum.removeListener("accountsChanged", handleAccountsChanged);
         window.ethereum.removeListener("chainChanged", updateNetworkInfo);
       }
     };
   }, [account]);
 
-  const handleConnect = async () => {
+  const handleConnect = async (account) => {
     try {
       const account = await connectWallet();
       setAccount(account);
@@ -75,6 +74,36 @@ function App() {
     showToast("Wallet disconnected", "info");
   };
 
+  const handleBackToHome = () => {
+    setMeetingId(null);
+  };
+
+  // If we're in a meeting, render only the Room component
+  if (meetingId) {
+    return (
+      <>
+        <ToastContainer
+          position="bottom-center"
+          autoClose={1000}
+          hideProgressBar={false}
+          newestOnTop={true}
+          closeOnClick
+          rtl={false}
+          pauseOnFocusLoss
+          draggable
+          pauseOnHover
+          theme="light"
+        />
+        <Room 
+          roomID={meetingId}
+          onBackToHome={handleBackToHome}
+          account={account}
+        />
+      </>
+    );
+  }
+
+  // Regular layout when not in a meeting
   return (
     <div className="min-h-screen bg-gray-50">
       <ToastContainer
@@ -99,21 +128,12 @@ function App() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="py-8">
           {!account ? (
-            <button
-              onClick={handleConnect}
-              className="w-full max-w-xs mx-auto bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200"
-            >
-              Connect Wallet
-            </button>
-          ) : meetingId ? (
-            <div>
-              <SuccessMessage meeting_id={meetingId} />
-            </div>
+            <LoginForm handleConnect={handleConnect} />
           ) : (
             <div className="space-y-8">
               <div className="text-center">
                 <h2 className="text-2xl font-bold text-gray-900 mb-4">
-                  Welcome to the Vision Connect!
+                  Welcome to Vision Connect!
                 </h2>
                 <p className="text-gray-600">
                   Your wallet is connected and ready to use.
@@ -125,7 +145,9 @@ function App() {
                 <h3 className="text-xl font-bold text-gray-900 mb-4">
                   Meeting Management
                 </h3>
-                <MeetingCreator account={account} />
+                <MeetingCreator 
+                  account={account}
+                />
               </div>
 
               {/* Sign Message Component */}

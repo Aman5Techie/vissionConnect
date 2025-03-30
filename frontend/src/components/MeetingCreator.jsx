@@ -1,45 +1,12 @@
 import { useState, useEffect } from "react";
 import showToast from "../utils/toast";
+import { createClient } from "@supabase/supabase-js";
 import { mapUserToMeeting } from "../utils/contractUtils";
 
-// Temporary user data
-const TEMP_USERS = [
-  {
-    name: "Alice",
-    publicKey: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-    selected: false,
-  },
-  {
-    name: "Bob",
-    publicKey: "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199",
-    selected: false,
-  },
-  {
-    name: "aman",
-    publicKey: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-    selected: false,
-  },
-  {
-    name: "Acoount 1",
-    publicKey: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-    selected: false,
-  },
-  {
-    name: "Account 2",
-    publicKey: "0x1A06e23352042ec262c19786886F021bb073d6E1",
-    selected: false,
-  },
-  {
-    name: "Account 3",
-    publicKey: "0x92806F9833eC9CfA60A5Ce1f1aed9509e65Fa137",
-    selected: false,
-  },
-  {
-    name: "Aman main account",
-    publicKey: "0xf0a2c73fF901e8dC96B6f990F7FE90054ED3F63f",
-    selected: false,
-  },
-];
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 const generateMeetingId = () => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -62,10 +29,89 @@ const MeetingCreator = ({ account }) => {
   const [selectedUsers, setSelectedUsers] = useState([]);
   const [currentMeetingId, setCurrentMeetingId] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [deletingMeetingId, setDeletingMeetingId] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [users, setUsers] = useState([]);
+
+  // Fetch all users from database on component mount
+  useEffect(() => {
+    fetchUsers();
+    fetchUserMeetings();
+  }, [account]);
+
+  // Fetch all users from the database
+  const fetchUsers = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('username, public_key')
+        .order('username', { ascending: true });
+      
+      if (error) throw error;
+      
+      // Format the users data to match our component's needs
+      setUsers(data.map(user => ({
+        name: user.username,
+        publicKey: user.public_key,
+      })));
+    } catch (error) {
+      console.error('Error fetching users:', error);
+      showToast('Failed to load users', 'error');
+    }
+  };
+
+  // Fetch meetings where the current user is a participant
+  const fetchUserMeetings = async () => {
+    try {
+      // Step 1: Get all meeting IDs where the current user is a participant
+      const { data: participantData, error: participantError } = await supabase
+        .from('meeting_participants')
+        .select('meeting_id')
+        .eq('user_public_key', account);
+      
+      if (participantError) throw participantError;
+      
+      if (!participantData || participantData.length === 0) {
+        setMeetings([]);
+        return;
+      }
+      
+      const meetingIds = participantData.map(item => item.meeting_id);
+      
+      // Step 2: Get details for each meeting
+      const { data: meetingsData, error: meetingsError } = await supabase
+        .from('meetings')
+        .select('id, created_by, created_at')
+        .in('id', meetingIds);
+      
+      if (meetingsError) throw meetingsError;
+      
+      // Step 3: For each meeting, get all participants
+      const meetingsWithParticipants = await Promise.all(meetingsData.map(async (meeting) => {
+        const { data: participants, error: participantsError } = await supabase
+          .from('meeting_participants')
+          .select('user_public_key')
+          .eq('meeting_id', meeting.id);
+        
+        if (participantsError) throw participantsError;
+        
+        return {
+          id: meeting.id,
+          createdBy: meeting.created_by,
+          createdAt: meeting.created_at,
+          participants: participants.map(p => p.user_public_key)
+        };
+      }));
+      
+      setMeetings(meetingsWithParticipants);
+    } catch (error) {
+      console.error('Error fetching meetings:', error);
+      showToast('Failed to load your meetings', 'error');
+    }
+  };
 
   // Filter users based on search query
-  const filteredUsers = TEMP_USERS.filter((user) => {
+  const filteredUsers = users.filter((user) => {
     const searchTerm = searchQuery.toLowerCase();
     return (
       user.name.toLowerCase().includes(searchTerm) ||
@@ -77,20 +123,31 @@ const MeetingCreator = ({ account }) => {
     const newMeetingId = generateMeetingId();
 
     try {
-      // First map the creator (account) to the new meeting
-
-      // Then update the local state with the new meeting
-      setMeetings([
-        ...meetings,
-        {
+      // Insert the new meeting into the database
+      const { error: meetingError } = await supabase
+        .from('meetings')
+        .insert({
           id: newMeetingId,
-          participants: [account], // Include the creator as the first participant
-        },
-      ]);
+          created_by: account
+        });
+      
+      if (meetingError) throw meetingError;
 
+      // Add the creator as a participant
+      const { error: participantError } = await supabase
+        .from('meeting_participants')
+        .insert({
+          meeting_id: newMeetingId,
+          user_public_key: account
+        });
+
+      if (participantError) throw participantError;
+
+      // Refresh the meetings list
+      await fetchUserMeetings();
+      
       showToast(`Meeting created with ID: ${newMeetingId}`, 'success');
-
-      await mapUserToMeeting(newMeetingId, account);
+      await mapUserToMeeting(newMeetingId, [account]);
     } catch (error) {
       console.error("Error creating meeting:", error);
       showToast("Failed to create meeting. Please try again.", 'error');
@@ -120,24 +177,24 @@ const MeetingCreator = ({ account }) => {
 
     setLoading(true);
     try {
-      // Process each selected user
-      for (const userAddress of selectedUsers) {
-        await mapUserToMeeting(currentMeetingId, userAddress);
-      }
+      // Prepare data for inserting multiple participants
+      const participantsToAdd = selectedUsers.map(publicKey => ({
+        meeting_id: currentMeetingId,
+        user_public_key: publicKey
+      }));
+      
+      // Insert all the new participants
+      const { error } = await supabase
+        .from('meeting_participants')
+        .insert(participantsToAdd);
+      
+      if (error) throw error;
 
-      // Update local state
-      setMeetings(
-        meetings.map((meeting) => {
-          if (meeting.id === currentMeetingId) {
-            return {
-              ...meeting,
-              participants: [...meeting.participants, ...selectedUsers],
-            };
-          }
-          return meeting;
-        })
-      );
-
+      
+      await mapUserToMeeting(currentMeetingId, selectedUsers);
+      // Refresh the meetings list to reflect changes
+      await fetchUserMeetings();
+      
       showToast("Users added successfully!", 'success');
       setIsModalOpen(false);
     } catch (error) {
@@ -147,7 +204,30 @@ const MeetingCreator = ({ account }) => {
       setLoading(false);
     }
   };
-  console.log("hghfg");
+
+  const deleteMeeting = async (meetingId) => {
+    try {
+      setDeletingMeetingId(meetingId);
+      
+      // Delete the meeting (cascade will also delete participants)
+      const { error } = await supabase
+        .from('meetings')
+        .delete()
+        .eq('id', meetingId);
+        
+      if (error) throw error;
+      
+      // Update local state to remove the deleted meeting
+      setMeetings(meetings.filter(meeting => meeting.id !== meetingId));
+      showToast("Meeting deleted successfully", 'success');
+    } catch (error) {
+      console.error("Error deleting meeting:", error);
+      showToast("Failed to delete meeting", 'error');
+    } finally {
+      setDeletingMeetingId(null);
+    }
+  };
+
   return (
     <div>
       {/* Header Information */}
@@ -175,12 +255,39 @@ const MeetingCreator = ({ account }) => {
                     <span className="font-medium mr-2">Meeting ID:</span>
                     <span className="font-mono">{meeting.id}</span>
                   </div>
-                  <button
-                    onClick={() => openAddUserModal(meeting.id)}
-                    className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded"
-                  >
-                    Add Users
-                  </button>
+                  <div className="flex items-center space-x-2">
+                    {meeting.createdBy === account && (<button
+                      onClick={() => openAddUserModal(meeting.id)}
+                      className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded"
+                    >
+                      Add Users
+                    </button>)}
+                    
+                    {/* Only show delete button for meeting creator */}
+                    {meeting.createdBy === account && (
+                      <button
+                        onClick={() => deleteMeeting(meeting.id)}
+                        disabled={deletingMeetingId === meeting.id}
+                        className={`w-8 h-8 flex items-center justify-center rounded-full 
+                          ${deletingMeetingId === meeting.id 
+                            ? 'bg-gray-300' 
+                            : 'bg-red-500 hover:bg-red-600'} 
+                          text-white transition-colors`}
+                        title="Delete Meeting"
+                      >
+                        {deletingMeetingId === meeting.id ? (
+                          <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        )}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Participants List */}
@@ -190,7 +297,7 @@ const MeetingCreator = ({ account }) => {
                   </div>
                   <div className="space-y-1">
                     {meeting.participants.map((participantAddress) => {
-                      const user = TEMP_USERS.find(
+                      const user = users.find(
                         (u) =>
                           u.publicKey.toLowerCase() ===
                           participantAddress.toLowerCase()
@@ -202,7 +309,7 @@ const MeetingCreator = ({ account }) => {
                         >
                           <span className="font-medium mr-2">
                             {user ? user.name : "Unknown User"}
-                            {participantAddress === account && " (Creator)"}
+                            {participantAddress === meeting.createdBy && " (Creator)"}
                           </span>
                           <span className="text-xs font-mono text-gray-400 truncate">
                             {participantAddress}
@@ -257,25 +364,35 @@ const MeetingCreator = ({ account }) => {
               {/* Users List */}
               <div className="space-y-4 max-h-60 overflow-y-auto">
                 {filteredUsers.length > 0 ? (
-                  filteredUsers.map((user) => (
-                    <label
-                      key={user.publicKey}
-                      className="flex items-start space-x-3 p-2 hover:bg-gray-50 rounded cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedUsers.includes(user.publicKey)}
-                        onChange={() => handleUserSelection(user.publicKey)}
-                        className="mt-1"
-                      />
-                      <div>
-                        <div className="font-medium">{user.name}</div>
-                        <div className="text-sm text-gray-500 font-mono">
-                          {user.publicKey}
+                  filteredUsers.map((user) => {
+                    // Don't show users that are already participants in this meeting
+                    const meeting = meetings.find(m => m.id === currentMeetingId);
+                    const isAlreadyParticipant = meeting && meeting.participants.some(
+                      p => p.toLowerCase() === user.publicKey.toLowerCase()
+                    );
+                    
+                    if (isAlreadyParticipant) return null;
+                    
+                    return (
+                      <label
+                        key={user.publicKey}
+                        className="flex items-start space-x-3 p-2 hover:bg-gray-50 rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedUsers.includes(user.publicKey)}
+                          onChange={() => handleUserSelection(user.publicKey)}
+                          className="mt-1"
+                        />
+                        <div>
+                          <div className="font-medium">{user.name}</div>
+                          <div className="text-sm text-gray-500 font-mono">
+                            {user.publicKey}
+                          </div>
                         </div>
-                      </div>
-                    </label>
-                  ))
+                      </label>
+                    );
+                  })
                 ) : (
                   <div className="text-center py-4 text-gray-500">
                     No users found matching "{searchQuery}"
