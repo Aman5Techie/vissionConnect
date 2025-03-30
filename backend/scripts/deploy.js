@@ -4,9 +4,9 @@ async function main() {
   const verifyuser = await hre.ethers.getContractFactory("VerifySignature");
   const contract = await verifyuser.deploy();
 
-  await contract.deployed();
+  // await contract.deployed();
 
-  console.log("Library deployed to:", contract.address);
+  console.log("Library deployed to:", contract.target);
 }
 
 main().catch((error) => {

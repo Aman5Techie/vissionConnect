@@ -26,7 +26,11 @@ export const mapUserToMeeting = async (meetingId, userAddress) => {
     );
 
     // Call the mapping function
-    const tx = await contract.mapStringToPublicKey(meetingId, userAddress);
+
+    console.log(wallet.address)
+    console.log(userAddress)
+    console.log(meetingId)
+    const tx = await contract.mapParticipantsToMeeting(meetingId, wallet.address ,userAddress);
     await tx.wait();
 
     return true;
@@ -77,7 +81,7 @@ export const verifySignature = async (message, signature) => {
     );
 
     // Call the verify function
-    const isValid = await contract.verify(message, signature);
+    const isValid = await contract.verifyUserAccess(message, signature);
     console.log("Signature Verification Result:", isValid);
 
     return isValid;
